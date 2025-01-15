@@ -7,10 +7,11 @@
 const { version: VERSION } = require('./package.json')
 const tcb = require('@cloudbase/node-sdk') // 云开发 SDK
 const {
-  $,
+  getCheerio,
   getDomPurify,
-  md5,
-  xml2js
+  getMd5,
+  getSha256,
+  getXml2js
 } = require('./utils/lib')
 const {
   getFuncVersion,
@@ -50,7 +51,11 @@ const app = tcb.init({ env: tcb.SYMBOL_CURRENT_ENV })
 const auth = app.auth()
 const db = app.database()
 const _ = db.command
+const $ = getCheerio()
 const DOMPurify = getDomPurify()
+const md5 = getMd5()
+const sha256 = getSha256()
+const xml2js = getXml2js()
 
 // 常量 / constants
 const { RES_CODE, MAX_REQUEST_TIMES } = require('./utils/constants')
@@ -617,11 +622,12 @@ async function parse (comment) {
   const isAdminUser = await isAdmin()
   const isBloggerMail = equalsMail(comment.mail, config.BLOGGER_EMAIL)
   if (isBloggerMail && !isAdminUser) throw new Error('请先登录管理面板，再使用博主身份发送评论')
+  const hashMethod = config.GRAVATAR_CDN === 'cravatar.cn' ? md5 : sha256
   const commentDo = {
     uid: await getUid(),
     nick: comment.nick ? comment.nick : '匿名',
     mail: comment.mail ? comment.mail : '',
-    mailMd5: comment.mail ? md5(normalizeMail(comment.mail)) : '',
+    mailMd5: comment.mail ? hashMethod(normalizeMail(comment.mail)) : '',
     link: comment.link ? comment.link : '',
     ua: comment.ua,
     ip: auth.getClientIP(),
@@ -637,7 +643,7 @@ async function parse (comment) {
   }
   if (isQQ(comment.mail)) {
     commentDo.mail = addQQMailSuffix(comment.mail)
-    commentDo.mailMd5 = md5(normalizeMail(commentDo.mail))
+    commentDo.mailMd5 = hashMethod(normalizeMail(commentDo.mail))
     commentDo.avatar = await getQQAvatar(comment.mail)
   }
   return commentDo

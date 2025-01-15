@@ -1,8 +1,30 @@
 const { URL } = require('url')
-const { axios, FormData, bowser, ipToRegion, md5 } = require('./lib')
+const {
+  getAxios,
+  getFormData,
+  getBowser,
+  getIpToRegion,
+  getMd5,
+  getSha256
+} = require('./lib')
+const axios = getAxios()
+const FormData = getFormData()
+const bowser = getBowser()
+const md5 = getMd5()
+const sha256 = getSha256()
 const { RES_CODE } = require('./constants')
-const ipRegionSearcher = ipToRegion.create() // 初始化 IP 属地
 const logger = require('./logger')
+
+let ipRegionSearcher
+
+// IP 属地查询
+function getIpRegionSearcher () {
+  if (!ipRegionSearcher) {
+    const ipToRegion = getIpToRegion()
+    ipRegionSearcher = ipToRegion.create() // 初始化 IP 属地
+  }
+  return ipRegionSearcher
+}
 
 const fn = {
   // 获取 Twikoo 云函数版本
@@ -45,7 +67,7 @@ const fn = {
     if (config.SHOW_UA !== 'false') {
       try {
         const ua = bowser.getParser(comment.ua)
-        const os = fn.fixOS(ua.getOS())
+        const os = fn.fixOS(ua)
         displayOs = [os.name, os.versionName ? os.versionName : os.version].join(' ')
         displayBrowser = [ua.getBrowserName(), ua.getBrowserVersion()].join(' ')
       } catch (e) {
@@ -76,7 +98,8 @@ const fn = {
       updated: comment.updated
     }
   },
-  fixOS (os) {
+  fixOS (ua) {
+    const os = ua.getOS()
     if (!os.versionName) {
       // fix version name of Win 11 & macOS ^11 & Android ^10
       if (os.name === 'Windows' && os.version === 'NT 11.0') {
@@ -87,7 +110,8 @@ const fn = {
           11: 'Big Sur',
           12: 'Monterey',
           13: 'Ventura',
-          14: 'Sonoma'
+          14: 'Sonoma',
+          15: 'Sequoia'
         }[majorPlatformVersion]
       } else if (os.name === 'Android') {
         const majorPlatformVersion = os.version.split('.')[0]
@@ -96,11 +120,27 @@ const fn = {
           11: 'Red Velvet Cake',
           12: 'Snow Cone',
           13: 'Tiramisu',
-          14: 'Upside Down Cake'
+          14: 'Upside Down Cake',
+          15: 'Vanilla Ice Cream',
+          16: 'Baklava'
         }[majorPlatformVersion]
+      } else if (ua.test(/harmony/i)) {
+        os.name = 'Harmony'
+        os.version = fn.getFirstMatch(/harmony[\s/-](\d+(\.\d+)*)/i, ua.getUA())
+        os.versionName = ''
       }
     }
     return os
+  },
+  /**
+   * Get first matched item for a string
+   * @param {RegExp} regexp
+   * @param {String} ua
+   * @return {Array|{index: number, input: string}|*|boolean|string}
+   */
+  getFirstMatch (regexp, ua) {
+    const match = ua.match(regexp)
+    return (match && match.length > 0 && match[1]) || ''
   },
   // 获取回复人昵称 / Get replied user nick name
   ruser (pid, comments = []) {
@@ -119,7 +159,7 @@ const fn = {
       ip = ip.replace(/^::ffff:/, '')
       // Zeabur 返回的地址带端口号，去掉端口号。TODO: 不知道该怎么去掉 IPv6 地址后面的端口号
       ip = ip.replace(/:[0-9]*$/, '')
-      const { region } = ipRegionSearcher.binarySearchSync(ip)
+      const { region } = getIpRegionSearcher().binarySearchSync(ip)
       const [country,, province, city, isp] = region.split('|')
       // 有省显示省，没有省显示国家
       const area = province.trim() && province !== '0' ? province : country
@@ -163,14 +203,23 @@ const fn = {
     }
     return md5(comment.nick)
   },
+  getMailSha256 (comment) {
+    if (comment.mail) {
+      return sha256(fn.normalizeMail(comment.mail))
+    }
+    return sha256(comment.nick)
+  },
   getAvatar (comment, config) {
     if (comment.avatar) {
       return comment.avatar
     } else {
-      const gravatarCdn = config.GRAVATAR_CDN || 'cravatar.cn'
-      const defaultGravatar = config.DEFAULT_GRAVATAR || 'identicon'
-      const mailMd5 = fn.getMailMd5(comment)
-      return `https://${gravatarCdn}/avatar/${mailMd5}?d=${defaultGravatar}`
+      const gravatarCdn = config.GRAVATAR_CDN || 'weavatar.com'
+      let defaultGravatar = gravatarCdn === 'weavatar.com' ? `letter&letter=${comment.nick.charAt(0)}` : 'identicon'
+      if (config.DEFAULT_GRAVATAR) {
+        defaultGravatar = config.DEFAULT_GRAVATAR
+      }
+      const mailHash = gravatarCdn === 'cravatar.cn' ? fn.getMailMd5(comment) : fn.getMailSha256(comment) // Cravatar 不支持 sha256
+      return `https://${gravatarCdn}/avatar/${mailHash}?d=${defaultGravatar}`
     }
   },
   isUrl (s) {
@@ -187,6 +236,7 @@ const fn = {
   async getQQAvatar (qq) {
     try {
       const qqNum = qq.replace(/@qq.com/ig, '')
+      // TODO: 这个接口已经失效了，暂时找不到新的接口
       const result = await axios.get(`https://aq.qq.com/cn2/get_img/get_face?img_type=3&uin=${qqNum}`)
       return result.data?.url || null
     } catch (e) {
@@ -276,6 +326,7 @@ const fn = {
         HIDE_ADMIN_CRYPT: config.HIDE_ADMIN_CRYPT,
         HIGHLIGHT: config.HIGHLIGHT || 'true',
         HIGHLIGHT_THEME: config.HIGHLIGHT_THEME,
+        HIGHLIGHT_PLUGIN: config.HIGHLIGHT_PLUGIN,
         LIMIT_LENGTH: config.LIMIT_LENGTH,
         TURNSTILE_SITE_KEY: config.TURNSTILE_SITE_KEY
       }
